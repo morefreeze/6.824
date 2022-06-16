@@ -1,0 +1,44 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "options": {
+                "cwd": "src/main"
+            },
+            "command": [
+                "go",
+                "build",
+                "-race",
+                "-buildmode=plugin",
+                "../mrapps/wc.go"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "options": {
+                "cwd": "src/main"
+            },
+            "command": [
+                "go",
+                "run",
+                "-race",
+                "mrsequential.go",
+                "wc.so",
+                "pg*.txt"
+            ],
+            "problemMatcher": [
+                "$go"
+            ]
+        }
+    ]
+}
