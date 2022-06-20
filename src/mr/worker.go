@@ -1,10 +1,15 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,7 +29,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
@@ -33,9 +37,26 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 	// ask for a file to process
-	
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	askFileReply, err := AskFile()
+	if err != nil {
+		log.Fatalf("askFile failed %v", err)
+		return
+	}
+	filename := askFileReply.Filename
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+	kva := mapf(filename, string(content))
+	tmpFile, _ := ioutil.TempFile("tmp", "mr-map-")
+	enc := json.NewEncoder(tmpFile)
+	enc.Encode(kva)
+	os.Rename(tmpFile.Name(), fmt.Sprintf("mr-out-%d", askFileReply.Num))
 
 }
 
@@ -60,6 +81,14 @@ func CallExample() {
 
 	// reply.Y should be 100.
 	fmt.Printf("reply.Y %v\n", reply.Y)
+}
+
+func AskFile() (*AskFileReply, error) {
+	var askFileReply AskFileReply
+	if succ := call("Coordinator.AskFile", &AskFileArgs{}, &askFileReply); succ {
+		return &askFileReply, nil
+	}
+	return nil, errors.New("call Coordinator.AskFile failed")
 }
 
 //

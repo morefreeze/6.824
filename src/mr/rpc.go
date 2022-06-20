@@ -25,9 +25,12 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-type HeartBeatArgs struct{}
+type AskFileArgs struct{}
 
-type HeartBeatReply struct{}
+type AskFileReply struct {
+	Num      int
+	Filename string
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

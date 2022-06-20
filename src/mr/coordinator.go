@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -10,12 +11,22 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-
+	nMap  int
+	files []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
-func (c *Coordinator) HeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) error {
-
+func (c *Coordinator) AskFile(args *AskFileArgs, reply *AskFileReply) error {
+	if c.nMap >= len(c.files) {
+		return errors.New("out of files")
+	}
+	if reply == nil {
+		reply = &AskFileReply{}
+	}
+	reply.Num = c.nMap
+	reply.Filename = c.files[reply.Num]
+	c.nMap += 1
+	return nil
 }
 
 //
