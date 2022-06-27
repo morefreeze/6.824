@@ -10,22 +10,33 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	nMap  int
-	files []string
+	nMap             int
+	nReduce          int
+	files            []string
+	nFinishMap       int
+	intermediateFile [][]string
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	if reply == nil {
-		reply = &MapperAskTaskReply{}
+		reply = &AskTaskReply{}
 	}
-	if c.nMap >= len(c.files) {
+	// distribute all mapper but not finish all yet
+	needWait := c.nMap >= len(c.files) && c.nFinishMap < c.nMap
+	if needWait {
 		reply.TaskType = TaskTypeWait
 		return nil
 	}
-	reply.Num = c.nMap
-	reply.Filename = c.files[reply.Num]
-	c.nMap += 1
+	// still distribute map task
+	if c.nMap < len(c.files) {
+		reply.Index = c.nMap
+		reply.Filename = c.files[reply.Index]
+		c.nMap += 1
+	} else {
+		// all map finish, distribute reduce task
+
+	}
 	return nil
 
 }
@@ -33,11 +44,14 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTaskDoneReply) error {
 	if args.TaskType == TaskTypeMap {
 		// mark map task done and check if can enter reduce
+
+		/* last mapper finish then sort kvs */
 	} else if args.TaskType == TaskTypeReduce {
 		// mark reduce task done and check if all finish
 	} else {
 		log.Fatalf("bad task type %v", args.TaskType)
 	}
+	return nil
 }
 
 //
@@ -87,7 +101,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-
+	c.files = files
+	c.nReduce = nReduce
+	log.Print("starting coordinator server")
 	c.server()
 	return &c
 }

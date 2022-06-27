@@ -38,10 +38,11 @@ type AskTaskArgs struct{}
 
 type AskTaskReply struct {
 	TaskType TaskType
-	Error    string
+	// Error    string
 	// mapper task
-	Num      int
+	Index    int
 	Filename string
+	NumR     int
 	// reducer task
 	Key    string
 	Values []string
@@ -49,6 +50,8 @@ type AskTaskReply struct {
 
 type NoticeTaskDoneArgs struct {
 	TaskType TaskType
+	// map task
+	MapOutputFilenames []string
 }
 
 type NoticeTaskDoneReply struct{}
