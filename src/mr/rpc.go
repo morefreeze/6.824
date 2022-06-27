@@ -24,10 +24,34 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
-type HeartBeatArgs struct{}
+type TaskType int
 
-type HeartBeatReply struct{}
+const (
+	TaskTypeUnknown TaskType = iota
+	TaskTypeMap
+	TaskTypeReduce
+	TaskTypeWait
+)
+
+// Add your RPC definitions here.
+type AskTaskArgs struct{}
+
+type AskTaskReply struct {
+	TaskType TaskType
+	Error    string
+	// mapper task
+	Num      int
+	Filename string
+	// reducer task
+	Key    string
+	Values []string
+}
+
+type NoticeTaskDoneArgs struct {
+	TaskType TaskType
+}
+
+type NoticeTaskDoneReply struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
