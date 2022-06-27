@@ -10,12 +10,34 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-
+	nMap  int
+	files []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
-func (c *Coordinator) HeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) error {
+func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
+	if reply == nil {
+		reply = &MapperAskTaskReply{}
+	}
+	if c.nMap >= len(c.files) {
+		reply.TaskType = TaskTypeWait
+		return nil
+	}
+	reply.Num = c.nMap
+	reply.Filename = c.files[reply.Num]
+	c.nMap += 1
+	return nil
 
+}
+
+func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTaskDoneReply) error {
+	if args.TaskType == TaskTypeMap {
+		// mark map task done and check if can enter reduce
+	} else if args.TaskType == TaskTypeReduce {
+		// mark reduce task done and check if all finish
+	} else {
+		log.Fatalf("bad task type %v", args.TaskType)
+	}
 }
 
 //

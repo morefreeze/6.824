@@ -1,10 +1,15 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,7 +29,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
@@ -33,10 +37,33 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 	// ask for a file to process
-	
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-
+	askTaskReply, err := AskTask()
+	if err != nil {
+		log.Fatalf("askTask failed %v", err)
+		return
+	}
+	if askTaskReply.TaskType == TaskTypeMap {
+		filename := askTaskReply.Filename
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatalf("cannot open %v", filename)
+		}
+		content, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v", filename)
+		}
+		file.Close()
+		kva := mapf(filename, string(content))
+		tmpFile, _ := ioutil.TempFile("tmp", "mr-map-")
+		enc := json.NewEncoder(tmpFile)
+		enc.Encode(kva)
+		os.Rename(tmpFile.Name(), fmt.Sprintf("mr-out-%d", askTaskReply.Num))
+		NoticeMapperTaskDone()
+	} else if askTaskReply.TaskType == TaskTypeReduce {
+		NoticeReducerTaskDone()
+	} else {
+		log.Fatalf("bad task type %v", askTaskReply.TaskType)
+	}
 }
 
 //
@@ -60,6 +87,34 @@ func CallExample() {
 
 	// reply.Y should be 100.
 	fmt.Printf("reply.Y %v\n", reply.Y)
+}
+
+func AskTask() (*AskTaskReply, error) {
+	var askTaskReply AskTaskReply
+	if succ := call("Coordinator.AskTask", &AskTaskArgs{}, &askTaskReply); succ {
+		return &askTaskReply, nil
+	}
+	return nil, errors.New("call Coordinator.AskTask failed")
+}
+
+func NoticeMapperTaskDone() (*NoticeTaskDoneReply, error) {
+	var reply NoticeTaskDoneReply
+	if succ := call("Coordinator.NoticeTaskDone", &NoticeTaskDoneArgs{
+		TaskType: TaskTypeMap,
+	}, &reply); succ {
+		return &reply, nil
+	}
+	return nil, errors.New("call Coordinator.NoticeMapperTaskDone failed")
+}
+
+func NoticeReducerTaskDone() (*NoticeTaskDoneReply, error) {
+	var reply NoticeTaskDoneReply
+	if succ := call("Coordinator.NoticeTaskDone", &NoticeTaskDoneArgs{
+		TaskType: TaskTypeReduce,
+	}, &reply); succ {
+		return &reply, nil
+	}
+	return nil, errors.New("call Coordinator.NoticeReducerTaskDone failed")
 }
 
 //
