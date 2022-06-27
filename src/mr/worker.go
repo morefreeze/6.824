@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"os/exec"
 	"sync"
 )
 
@@ -39,6 +40,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 	// ask for a file to process
 	askTaskReply, err := AskTask()
+	log.Printf("receive AskTask %+v", askTaskReply)
 	if err != nil {
 		log.Fatalf("askTask failed %v", err)
 		return
@@ -61,18 +63,25 @@ func Worker(mapf func(string, string) []KeyValue,
 		var wg sync.WaitGroup
 		wg.Add(askTaskReply.NumR)
 		chs := []chan KeyValue{}
-		filenameCh := make(chan string)
+		filenameCh := make(chan string, askTaskReply.NumR)
 		for i := 0; i < askTaskReply.NumR; i++ {
 			ch := make(chan KeyValue)
 			go func(idxR int, ch chan KeyValue) {
 				defer wg.Done()
-				tmpFile, _ := ioutil.TempFile("tmp", "mr-map-")
+				tmpFile, err := ioutil.TempFile("/tmp", "mr-map-")
+				if err != nil {
+					log.Fatalf("create tmp file failed %v", err)
+				}
 				enc := json.NewEncoder(tmpFile)
 				for kv := range ch {
 					enc.Encode(kv)
 				}
-				outputFilename := fmt.Sprintf("mr-map-%d-%d", askTaskReply.Index, idxR)
-				os.Rename(tmpFile.Name(), outputFilename)
+				outputFilename := fmt.Sprintf("./mr-map-%d-%d", askTaskReply.Index, idxR)
+				err = mv(tmpFile.Name(), outputFilename)
+				if err != nil {
+					log.Fatalf("rename file failed tmp file: %v err: %v", outputFilename, err)
+				}
+				log.Printf("finish map output filename: %v", outputFilename)
 				filenameCh <- outputFilename
 			}(i, ch)
 			chs = append(chs, ch)
@@ -81,15 +90,18 @@ func Worker(mapf func(string, string) []KeyValue,
 			n := ihash(kv.Key) % askTaskReply.NumR
 			chs[n] <- kv
 		}
+		log.Printf("staring close chs")
 		for _, ch := range chs {
 			close(ch)
 		}
 		wg.Wait()
+		log.Printf("starting receive output filename")
 		close(filenameCh)
 		outputFilenames := make([]string, 0, askTaskReply.NumR)
 		for filename := range filenameCh {
 			outputFilenames = append(outputFilenames, filename)
 		}
+		log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 		NoticeMapperTaskDone(outputFilenames)
 	} else if askTaskReply.TaskType == TaskTypeReduce {
 		NoticeReducerTaskDone()
@@ -125,6 +137,12 @@ func NoticeReducerTaskDone() (*NoticeTaskDoneReply, error) {
 		return &reply, nil
 	}
 	return nil, errors.New("call Coordinator.NoticeReducerTaskDone failed")
+}
+
+func mv(oldpath, newpath string) error {
+	cmd := exec.Command("mv", oldpath, newpath)
+	_, err := cmd.Output()
+	return err
 }
 
 //

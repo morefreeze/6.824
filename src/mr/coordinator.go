@@ -22,6 +22,7 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	if reply == nil {
 		reply = &AskTaskReply{}
 	}
+	defer log.Printf("distribute task reply: %+v", reply)
 	// distribute all mapper but not finish all yet
 	needWait := c.nMap >= len(c.files) && c.nFinishMap < c.nMap
 	if needWait {
@@ -30,8 +31,10 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	}
 	// still distribute map task
 	if c.nMap < len(c.files) {
+		reply.TaskType = TaskTypeMap
 		reply.Index = c.nMap
 		reply.Filename = c.files[reply.Index]
+		reply.NumR = c.nReduce
 		c.nMap += 1
 	} else {
 		// all map finish, distribute reduce task
