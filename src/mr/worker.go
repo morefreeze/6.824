@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 //
@@ -43,6 +44,9 @@ func Worker(mapf func(string, string) []KeyValue,
 		return
 	}
 	if askTaskReply.TaskType == TaskTypeMap {
+		if askTaskReply.NumR <= 0 {
+			panic("numR should be greater 0")
+		}
 		filename := askTaskReply.Filename
 		file, err := os.Open(filename)
 		if err != nil {
@@ -54,39 +58,44 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		file.Close()
 		kva := mapf(filename, string(content))
-		tmpFile, _ := ioutil.TempFile("tmp", "mr-map-")
-		enc := json.NewEncoder(tmpFile)
-		enc.Encode(kva)
-		os.Rename(tmpFile.Name(), fmt.Sprintf("mr-out-%d", askTaskReply.Num))
-		NoticeMapperTaskDone()
+		var wg sync.WaitGroup
+		wg.Add(askTaskReply.NumR)
+		chs := []chan KeyValue{}
+		filenameCh := make(chan string)
+		for i := 0; i < askTaskReply.NumR; i++ {
+			ch := make(chan KeyValue)
+			go func(idxR int, ch chan KeyValue) {
+				defer wg.Done()
+				tmpFile, _ := ioutil.TempFile("tmp", "mr-map-")
+				enc := json.NewEncoder(tmpFile)
+				for kv := range ch {
+					enc.Encode(kv)
+				}
+				outputFilename := fmt.Sprintf("mr-map-%d-%d", askTaskReply.Index, idxR)
+				os.Rename(tmpFile.Name(), outputFilename)
+				filenameCh <- outputFilename
+			}(i, ch)
+			chs = append(chs, ch)
+		}
+		for _, kv := range kva {
+			n := ihash(kv.Key) % askTaskReply.NumR
+			chs[n] <- kv
+		}
+		for _, ch := range chs {
+			close(ch)
+		}
+		wg.Wait()
+		close(filenameCh)
+		outputFilenames := make([]string, 0, askTaskReply.NumR)
+		for filename := range filenameCh {
+			outputFilenames = append(outputFilenames, filename)
+		}
+		NoticeMapperTaskDone(outputFilenames)
 	} else if askTaskReply.TaskType == TaskTypeReduce {
 		NoticeReducerTaskDone()
 	} else {
 		log.Fatalf("bad task type %v", askTaskReply.TaskType)
 	}
-}
-
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.Example", &args, &reply)
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 func AskTask() (*AskTaskReply, error) {
@@ -97,10 +106,11 @@ func AskTask() (*AskTaskReply, error) {
 	return nil, errors.New("call Coordinator.AskTask failed")
 }
 
-func NoticeMapperTaskDone() (*NoticeTaskDoneReply, error) {
+func NoticeMapperTaskDone(outputFilenames []string) (*NoticeTaskDoneReply, error) {
 	var reply NoticeTaskDoneReply
 	if succ := call("Coordinator.NoticeTaskDone", &NoticeTaskDoneArgs{
-		TaskType: TaskTypeMap,
+		TaskType:           TaskTypeMap,
+		MapOutputFilenames: outputFilenames,
 	}, &reply); succ {
 		return &reply, nil
 	}
@@ -138,4 +148,27 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+//
+// example function to show how to make an RPC call to the coordinator.
+//
+// the RPC argument and reply types are defined in rpc.go.
+//
+func CallExample() {
+
+	// declare an argument structure.
+	args := ExampleArgs{}
+
+	// fill in the argument(s).
+	args.X = 99
+
+	// declare a reply structure.
+	reply := ExampleReply{}
+
+	// send the RPC request, wait for the reply.
+	call("Coordinator.Example", &args, &reply)
+
+	// reply.Y should be 100.
+	fmt.Printf("reply.Y %v\n", reply.Y)
 }
