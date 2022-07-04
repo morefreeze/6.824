@@ -36,7 +36,6 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
 	// Your worker implementation here.
 	// ask for a file to process
 	askTaskReply, err := AskTask()
@@ -104,6 +103,9 @@ func Worker(mapf func(string, string) []KeyValue,
 		log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 		NoticeMapperTaskDone(outputFilenames)
 	} else if askTaskReply.TaskType == TaskTypeReduce {
+		// read file
+		// sort by key
+		// same key use redecef
 		NoticeReducerTaskDone()
 	} else {
 		log.Fatalf("bad task type %v", askTaskReply.TaskType)
