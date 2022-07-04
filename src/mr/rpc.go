@@ -50,6 +50,8 @@ type NoticeTaskDoneArgs struct {
 	TaskType TaskType
 	// map task
 	MapOutputFilenames []string
+	// reduce task
+	ReduceOutputFilename string
 }
 
 type NoticeTaskDoneReply struct{}

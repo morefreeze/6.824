@@ -10,6 +10,7 @@ import (
 	"net/rpc"
 	"os"
 	"os/exec"
+	"sort"
 	"sync"
 )
 
@@ -20,6 +21,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -51,10 +60,11 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		NoticeMapperTaskDone(outputFilenames)
 	} else if askTaskReply.TaskType == TaskTypeReduce {
-		// read file
-		// sort by key
-		// same key use redecef
-		NoticeReducerTaskDone()
+		outputFilename, err := doReduce(askTaskReply, reducef)
+		if err != nil {
+			log.Fatalf("doReduce failed %v", err)
+		}
+		NoticeReducerTaskDone(outputFilename)
 	} else {
 		log.Fatalf("bad task type %v", askTaskReply.TaskType)
 	}
@@ -79,10 +89,11 @@ func NoticeMapperTaskDone(outputFilenames []string) (*NoticeTaskDoneReply, error
 	return nil, errors.New("call Coordinator.NoticeMapperTaskDone failed")
 }
 
-func NoticeReducerTaskDone() (*NoticeTaskDoneReply, error) {
+func NoticeReducerTaskDone(outputFilename string) (*NoticeTaskDoneReply, error) {
 	var reply NoticeTaskDoneReply
 	if succ := call("Coordinator.NoticeTaskDone", &NoticeTaskDoneArgs{
-		TaskType: TaskTypeReduce,
+		TaskType:             TaskTypeReduce,
+		ReduceOutputFilename: outputFilename,
 	}, &reply); succ {
 		return &reply, nil
 	}
@@ -147,6 +158,55 @@ func doMap(askTaskReply *AskTaskReply, mapf func(string, string) []KeyValue) ([]
 	}
 	log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 	return outputFilenames, nil
+}
+
+func doReduce(askTaskReply *AskTaskReply, reducef func(string, []string) string) (string, error) {
+	if askTaskReply.TaskType != TaskTypeReduce {
+		return "", fmt.Errorf("wrong type %v", askTaskReply.TaskType)
+	}
+	kva := []KeyValue{}
+	// read file
+	for _, filename := range askTaskReply.intermediateFiles {
+		file, err := os.Open(filename)
+		if err != nil {
+			return "", fmt.Errorf("open intermediate file failed, filename: %v, err: %v", filename, err)
+		}
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+	}
+	// sort by key
+	sort.Sort(ByKey(kva))
+	// create tmp file and rename when finish
+	tmpFile, err := ioutil.TempFile("/tmp", "mr-map-")
+	if err != nil {
+		log.Fatalf("create tmp file failed %v", err)
+	}
+	// same key use redecef
+	lastKey := ""
+	sameV := []string{}
+	for _, kv := range kva {
+		if len(sameV) == 0 || kv.Key == lastKey {
+			sameV = append(sameV, kv.Value)
+		} else {
+			_, _ = tmpFile.WriteString(reducef(lastKey, sameV) + "\n")
+			lastKey = kv.Key
+			sameV = []string{kv.Value}
+		}
+	}
+	if len(sameV) > 0 {
+		reducef(lastKey, sameV)
+		_, _ = tmpFile.WriteString(reducef(lastKey, sameV) + "\n")
+	}
+	// rename tmp file
+	outputFilename := fmt.Sprintf("mr-out-%v", askTaskReply.Index)
+	mv(tmpFile.Name(), outputFilename)
+	return outputFilename, nil
 }
 
 func mv(oldpath, newpath string) error {
