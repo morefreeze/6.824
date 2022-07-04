@@ -10,11 +10,13 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	nMap             int
+	idxMap           int // TODO: need threadsafe
 	nReduce          int
 	files            []string
 	nFinishMap       int
 	intermediateFile [][]string
+	readyReduce      bool
+	idxReduce        int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -23,22 +25,20 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 		reply = &AskTaskReply{}
 	}
 	defer log.Printf("distribute task reply: %+v", reply)
-	// distribute all mapper but not finish all yet
-	needWait := c.nMap >= len(c.files) && c.nFinishMap < c.nMap
-	if needWait {
-		reply.TaskType = TaskTypeWait
-		return nil
-	}
+	reply.TaskType = TaskTypeNothing
 	// still distribute map task
-	if c.nMap < len(c.files) {
+	if !c.readyReduce && c.idxMap < len(c.files) {
 		reply.TaskType = TaskTypeMap
-		reply.Index = c.nMap
+		reply.Index = c.idxMap
 		reply.Filename = c.files[reply.Index]
 		reply.NumR = c.nReduce
-		c.nMap += 1
-	} else {
+		c.idxMap += 1
+	} else if c.readyReduce {
 		// all map finish, distribute reduce task
-
+		reply.TaskType = TaskTypeReduce
+		reply.intermediateFiles = c.intermediateFile[c.idxReduce]
+		reply.Index = c.idxReduce
+		c.idxReduce += 1
 	}
 	return nil
 
@@ -47,8 +47,14 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTaskDoneReply) error {
 	if args.TaskType == TaskTypeMap {
 		// mark map task done and check if can enter reduce
-
 		/* last mapper finish then sort kvs */
+		for i, filename := range args.MapOutputFilenames {
+			c.intermediateFile[i] = append(c.intermediateFile[i], filename)
+		}
+		c.nFinishMap += 1
+		// all map finish, ready to distribute reduce task
+		c.readyReduce = c.nFinishMap == len(c.files)
+		return nil
 	} else if args.TaskType == TaskTypeReduce {
 		// mark reduce task done and check if all finish
 	} else {
@@ -106,7 +112,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// Your code here.
 	c.files = files
 	c.nReduce = nReduce
-	log.Print("starting coordinator server")
+	c.intermediateFile = make([][]string, nReduce)
+	c.readyReduce = false
+
+	log.Printf("starting coordinator server with %v files", len(files))
 	c.server()
 	return &c
 }

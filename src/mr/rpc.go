@@ -27,10 +27,9 @@ type ExampleReply struct {
 type TaskType int
 
 const (
-	TaskTypeUnknown TaskType = iota
+	TaskTypeNothing TaskType = iota
 	TaskTypeMap
 	TaskTypeReduce
-	TaskTypeWait
 )
 
 // Add your RPC definitions here.
@@ -44,8 +43,7 @@ type AskTaskReply struct {
 	Filename string
 	NumR     int
 	// reducer task
-	Key    string
-	Values []string
+	intermediateFiles []string
 }
 
 type NoticeTaskDoneArgs struct {

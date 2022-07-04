@@ -36,7 +36,6 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
 	// Your worker implementation here.
 	// ask for a file to process
 	askTaskReply, err := AskTask()
@@ -46,64 +45,15 @@ func Worker(mapf func(string, string) []KeyValue,
 		return
 	}
 	if askTaskReply.TaskType == TaskTypeMap {
-		if askTaskReply.NumR <= 0 {
-			panic("numR should be greater 0")
-		}
-		filename := askTaskReply.Filename
-		file, err := os.Open(filename)
+		outputFilenames, err := doMap(askTaskReply, mapf)
 		if err != nil {
-			log.Fatalf("cannot open %v", filename)
+			log.Fatalf("doMap failed %v", err)
 		}
-		content, err := ioutil.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v", filename)
-		}
-		file.Close()
-		kva := mapf(filename, string(content))
-		var wg sync.WaitGroup
-		wg.Add(askTaskReply.NumR)
-		chs := []chan KeyValue{}
-		filenameCh := make(chan string, askTaskReply.NumR)
-		for i := 0; i < askTaskReply.NumR; i++ {
-			ch := make(chan KeyValue)
-			go func(idxR int, ch chan KeyValue) {
-				defer wg.Done()
-				tmpFile, err := ioutil.TempFile("/tmp", "mr-map-")
-				if err != nil {
-					log.Fatalf("create tmp file failed %v", err)
-				}
-				enc := json.NewEncoder(tmpFile)
-				for kv := range ch {
-					enc.Encode(kv)
-				}
-				outputFilename := fmt.Sprintf("./mr-map-%d-%d", askTaskReply.Index, idxR)
-				err = mv(tmpFile.Name(), outputFilename)
-				if err != nil {
-					log.Fatalf("rename file failed tmp file: %v err: %v", outputFilename, err)
-				}
-				log.Printf("finish map output filename: %v", outputFilename)
-				filenameCh <- outputFilename
-			}(i, ch)
-			chs = append(chs, ch)
-		}
-		for _, kv := range kva {
-			n := ihash(kv.Key) % askTaskReply.NumR
-			chs[n] <- kv
-		}
-		log.Printf("staring close chs")
-		for _, ch := range chs {
-			close(ch)
-		}
-		wg.Wait()
-		log.Printf("starting receive output filename")
-		close(filenameCh)
-		outputFilenames := make([]string, 0, askTaskReply.NumR)
-		for filename := range filenameCh {
-			outputFilenames = append(outputFilenames, filename)
-		}
-		log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 		NoticeMapperTaskDone(outputFilenames)
 	} else if askTaskReply.TaskType == TaskTypeReduce {
+		// read file
+		// sort by key
+		// same key use redecef
 		NoticeReducerTaskDone()
 	} else {
 		log.Fatalf("bad task type %v", askTaskReply.TaskType)
@@ -137,6 +87,66 @@ func NoticeReducerTaskDone() (*NoticeTaskDoneReply, error) {
 		return &reply, nil
 	}
 	return nil, errors.New("call Coordinator.NoticeReducerTaskDone failed")
+}
+
+func doMap(askTaskReply *AskTaskReply, mapf func(string, string) []KeyValue) ([]string, error) {
+	if askTaskReply.NumR <= 0 {
+		panic("numR should be greater 0")
+	}
+	filename := askTaskReply.Filename
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("open file failed, filename: %v, err: %v", filename, err)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("read file failed, filename: %v, err: %v", filename, err)
+	}
+	file.Close()
+	kva := mapf(filename, string(content))
+	var wg sync.WaitGroup
+	wg.Add(askTaskReply.NumR)
+	chs := []chan KeyValue{}
+	filenameCh := make(chan string, askTaskReply.NumR)
+	for i := 0; i < askTaskReply.NumR; i++ {
+		ch := make(chan KeyValue)
+		go func(idxR int, ch chan KeyValue) {
+			defer wg.Done()
+			tmpFile, err := ioutil.TempFile("/tmp", "mr-map-")
+			if err != nil {
+				log.Fatalf("create tmp file failed %v", err)
+			}
+			enc := json.NewEncoder(tmpFile)
+			for kv := range ch {
+				enc.Encode(kv)
+			}
+			outputFilename := fmt.Sprintf("./mr-map-%d-%d", askTaskReply.Index, idxR)
+			err = mv(tmpFile.Name(), outputFilename)
+			if err != nil {
+				log.Fatalf("rename file failed tmp file: %v err: %v", outputFilename, err)
+			}
+			log.Printf("finish map output filename: %v", outputFilename)
+			filenameCh <- outputFilename
+		}(i, ch)
+		chs = append(chs, ch)
+	}
+	for _, kv := range kva {
+		n := ihash(kv.Key) % askTaskReply.NumR
+		chs[n] <- kv
+	}
+	log.Printf("staring close chs")
+	for _, ch := range chs {
+		close(ch)
+	}
+	wg.Wait()
+	log.Printf("starting receive output filename")
+	close(filenameCh)
+	outputFilenames := make([]string, 0, askTaskReply.NumR)
+	for filename := range filenameCh {
+		outputFilenames = append(outputFilenames, filename)
+	}
+	log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
+	return outputFilenames, nil
 }
 
 func mv(oldpath, newpath string) error {
