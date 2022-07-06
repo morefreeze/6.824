@@ -47,26 +47,31 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// ask for a file to process
-	askTaskReply, err := AskTask()
-	log.Printf("receive AskTask %+v", askTaskReply)
-	if err != nil {
-		log.Fatalf("askTask failed %v", err)
-		return
-	}
-	if askTaskReply.TaskType == TaskTypeMap {
-		outputFilenames, err := doMap(askTaskReply, mapf)
+	for {
+		askTaskReply, err := AskTask()
+		log.Printf("receive AskTask %+v", askTaskReply)
 		if err != nil {
-			log.Fatalf("doMap failed %v", err)
+			log.Fatalf("askTask failed %v", err)
+			return
 		}
-		NoticeMapperTaskDone(outputFilenames)
-	} else if askTaskReply.TaskType == TaskTypeReduce {
-		outputFilename, err := doReduce(askTaskReply, reducef)
-		if err != nil {
-			log.Fatalf("doReduce failed %v", err)
+		if askTaskReply.TaskType == TaskTypeMap {
+			outputFilenames, err := doMap(askTaskReply, mapf)
+			if err != nil {
+				log.Fatalf("doMap failed %v", err)
+			}
+			NoticeMapperTaskDone(outputFilenames)
+		} else if askTaskReply.TaskType == TaskTypeReduce {
+			outputFilename, err := doReduce(askTaskReply, reducef)
+			if err != nil {
+				log.Fatalf("doReduce failed %v", err)
+			}
+			NoticeReducerTaskDone(outputFilename)
+		} else if askTaskReply.TaskType == TaskTypeNothing {
+			log.Printf("nothing to do, exiting...")
+			return
+		} else {
+			log.Fatalf("bad task type %v", askTaskReply.TaskType)
 		}
-		NoticeReducerTaskDone(outputFilename)
-	} else {
-		log.Fatalf("bad task type %v", askTaskReply.TaskType)
 	}
 }
 
@@ -166,7 +171,7 @@ func doReduce(askTaskReply *AskTaskReply, reducef func(string, []string) string)
 	}
 	kva := []KeyValue{}
 	// read file
-	for _, filename := range askTaskReply.intermediateFiles {
+	for _, filename := range askTaskReply.IntermediateFiles {
 		file, err := os.Open(filename)
 		if err != nil {
 			return "", fmt.Errorf("open intermediate file failed, filename: %v, err: %v", filename, err)

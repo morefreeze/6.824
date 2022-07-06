@@ -43,7 +43,7 @@ type AskTaskReply struct {
 	Filename string
 	NumR     int
 	// reducer task
-	intermediateFiles []string
+	IntermediateFiles []string
 }
 
 type NoticeTaskDoneArgs struct {

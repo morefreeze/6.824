@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type Coordinator struct {
 	// Your definitions here.
-	idxMap           int // TODO: need threadsafe
+	mu               sync.Mutex
+	idxMap           int
 	nReduce          int
 	files            []string
 	nFinishMap       int
@@ -26,6 +28,8 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	}
 	defer log.Printf("distribute task reply: %+v", reply)
 	reply.TaskType = TaskTypeNothing
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	// still distribute map task
 	if !c.readyReduce && c.idxMap < len(c.files) {
 		reply.TaskType = TaskTypeMap
@@ -36,7 +40,7 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	} else if c.readyReduce {
 		// all map finish, distribute reduce task
 		reply.TaskType = TaskTypeReduce
-		reply.intermediateFiles = c.intermediateFile[c.idxReduce]
+		reply.IntermediateFiles = c.intermediateFile[c.idxReduce]
 		reply.Index = c.idxReduce
 		c.idxReduce += 1
 	}
@@ -48,6 +52,8 @@ func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTask
 	if args.TaskType == TaskTypeMap {
 		// mark map task done and check if can enter reduce
 		/* last mapper finish then sort kvs */
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		for i, filename := range args.MapOutputFilenames {
 			c.intermediateFile[i] = append(c.intermediateFile[i], filename)
 		}
