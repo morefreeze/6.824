@@ -198,15 +198,17 @@ func doReduce(askTaskReply *AskTaskReply, reducef func(string, []string) string)
 	for _, kv := range kva {
 		if len(sameV) == 0 || kv.Key == lastKey {
 			sameV = append(sameV, kv.Value)
+			lastKey = kv.Key
 		} else {
-			_, _ = tmpFile.WriteString(reducef(lastKey, sameV) + "\n")
+			line := fmt.Sprintf("%v %v\n", lastKey, reducef(lastKey, sameV))
+			_, _ = tmpFile.WriteString(line)
 			lastKey = kv.Key
 			sameV = []string{kv.Value}
 		}
 	}
 	if len(sameV) > 0 {
-		reducef(lastKey, sameV)
-		_, _ = tmpFile.WriteString(reducef(lastKey, sameV) + "\n")
+		line := fmt.Sprintf("%v %v\n", lastKey, reducef(lastKey, sameV))
+		_, _ = tmpFile.WriteString(line)
 	}
 	// rename tmp file
 	outputFilename := fmt.Sprintf("mr-out-%v", askTaskReply.Index)
