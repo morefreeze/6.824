@@ -7,6 +7,9 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type Coordinator struct {
@@ -20,6 +23,9 @@ type Coordinator struct {
 	readyReduce      bool
 	idxReduce        int
 	outFiles         map[string]bool
+	// worker management
+	liveWorkers map[string]time.Time // [id]->ttl
+	refreshTime time.Duration
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -78,6 +84,48 @@ func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTask
 	return nil
 }
 
+func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) error {
+	if reply == nil {
+		reply = &HeartbeatReply{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if args.Init {
+		reply.ID = uuid.New().String()
+		c.liveWorkers[reply.ID] = time.Now().Add(c.refreshTime)
+		tomb := make(chan struct{}, 1)
+		go func(c *Coordinator, id string) {
+			<-tomb
+			log.Printf("receive dead letter id[%v]", id)
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			delete(c.liveWorkers, id)
+		}(c, reply.ID)
+		expireTime := time.After(c.refreshTime)
+		go func(id string, c *Coordinator) {
+			for t := range expireTime {
+				log.Printf("check time %v", t)
+				c.mu.Lock()
+				if newTime, ok := c.liveWorkers[id]; ok && newTime.After(t) {
+					expireTime = time.After(time.Until(newTime))
+					c.mu.Unlock()
+				} else {
+					// id is dead
+					c.mu.Unlock()
+					break
+				}
+			}
+			log.Printf("%v die at %v", id, time.Now())
+			tomb <- struct{}{}
+		}(reply.ID, c)
+	} else {
+		reply.ID = args.ID
+	}
+	// refresh worker id
+	c.liveWorkers[reply.ID] = time.Now().Add(c.refreshTime)
+	return nil
+}
+
 //
 // an example RPC handler.
 //
@@ -132,6 +180,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.intermediateFile = make([][]string, nReduce)
 	c.readyReduce = false
 	c.outFiles = make(map[string]bool, nReduce)
+	c.refreshTime = time.Second * 10
 
 	log.Printf("starting coordinator server with %v files", len(files))
 	c.server()

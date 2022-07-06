@@ -48,6 +48,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// ask for a file to process
+	go heartbeat()
 	for {
 		askTaskReply, err := AskTask()
 		log.Printf("receive AskTask %+v", askTaskReply)
@@ -221,6 +222,25 @@ func doReduce(askTaskReply *AskTaskReply, reducef func(string, []string) string)
 	outputFilename := fmt.Sprintf("mr-out-%v", askTaskReply.Index)
 	mv(tmpFile.Name(), outputFilename)
 	return outputFilename, nil
+}
+
+func heartbeat() {
+	reply, err := Heartbeat(true, "")
+	if err != nil {
+		log.Fatalf("init heartbeat failed %v", err)
+	}
+	tick := time.NewTicker(time.Second)
+	for range tick.C {
+		Heartbeat(false, reply.ID)
+	}
+}
+
+func Heartbeat(init bool, id string) (*HeartbeatReply, error) {
+	var heartbeatReply HeartbeatReply
+	if succ := call("Coordinator.Heartbeat", &HeartbeatArgs{Init: init, ID: id}, &heartbeatReply); succ {
+		return &heartbeatReply, nil
+	}
+	return nil, errors.New("call Coordinator.Heartbeat failed")
 }
 
 func mv(oldpath, newpath string) error {

@@ -57,6 +57,15 @@ type NoticeTaskDoneArgs struct {
 
 type NoticeTaskDoneReply struct{}
 
+type HeartbeatArgs struct {
+	Init bool // this is a new worker, so coordinator will distribute a new id
+	ID   string
+}
+
+type HeartbeatReply struct {
+	ID string
+}
+
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
 // Can't use the current directory since
