@@ -30,6 +30,7 @@ const (
 	TaskTypeNothing TaskType = iota
 	TaskTypeMap
 	TaskTypeReduce
+	TaskTypeWait
 )
 
 // Add your RPC definitions here.

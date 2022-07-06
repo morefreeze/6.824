@@ -19,6 +19,7 @@ type Coordinator struct {
 	intermediateFile [][]string
 	readyReduce      bool
 	idxReduce        int
+	outFiles         map[string]bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -31,13 +32,16 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// still distribute map task
-	if !c.readyReduce && c.idxMap < len(c.files) {
-		reply.TaskType = TaskTypeMap
-		reply.Index = c.idxMap
-		reply.Filename = c.files[reply.Index]
-		reply.NumR = c.nReduce
-		c.idxMap += 1
-	} else if c.readyReduce {
+	if !c.readyReduce {
+		reply.TaskType = TaskTypeWait
+		if c.idxMap < len(c.files) {
+			reply.TaskType = TaskTypeMap
+			reply.Index = c.idxMap
+			reply.Filename = c.files[reply.Index]
+			reply.NumR = c.nReduce
+			c.idxMap += 1
+		}
+	} else if c.idxReduce < len(c.intermediateFile) {
 		// all map finish, distribute reduce task
 		reply.TaskType = TaskTypeReduce
 		reply.IntermediateFiles = c.intermediateFile[c.idxReduce]
@@ -63,6 +67,11 @@ func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTask
 		return nil
 	} else if args.TaskType == TaskTypeReduce {
 		// mark reduce task done and check if all finish
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if _, exist := c.outFiles[args.ReduceOutputFilename]; !exist {
+			c.outFiles[args.ReduceOutputFilename] = true
+		}
 	} else {
 		log.Fatalf("bad task type %v", args.TaskType)
 	}
@@ -103,7 +112,9 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ret = len(c.outFiles) == c.nReduce
 	return ret
 }
 
@@ -120,6 +131,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.nReduce = nReduce
 	c.intermediateFile = make([][]string, nReduce)
 	c.readyReduce = false
+	c.outFiles = make(map[string]bool, nReduce)
 
 	log.Printf("starting coordinator server with %v files", len(files))
 	c.server()

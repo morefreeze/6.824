@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"sort"
 	"sync"
+	"time"
 )
 
 //
@@ -54,22 +55,27 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Fatalf("askTask failed %v", err)
 			return
 		}
-		if askTaskReply.TaskType == TaskTypeMap {
+		switch askTaskReply.TaskType {
+		case TaskTypeMap:
 			outputFilenames, err := doMap(askTaskReply, mapf)
 			if err != nil {
 				log.Fatalf("doMap failed %v", err)
 			}
 			NoticeMapperTaskDone(outputFilenames)
-		} else if askTaskReply.TaskType == TaskTypeReduce {
+		case TaskTypeReduce:
 			outputFilename, err := doReduce(askTaskReply, reducef)
 			if err != nil {
 				log.Fatalf("doReduce failed %v", err)
 			}
 			NoticeReducerTaskDone(outputFilename)
-		} else if askTaskReply.TaskType == TaskTypeNothing {
+		case TaskTypeNothing:
 			log.Printf("nothing to do, exiting...")
 			return
-		} else {
+		case TaskTypeWait:
+			waitTime := time.Second
+			log.Printf("wait %v", waitTime)
+			time.Sleep(waitTime)
+		default:
 			log.Fatalf("bad task type %v", askTaskReply.TaskType)
 		}
 	}
@@ -161,6 +167,7 @@ func doMap(askTaskReply *AskTaskReply, mapf func(string, string) []KeyValue) ([]
 	for filename := range filenameCh {
 		outputFilenames = append(outputFilenames, filename)
 	}
+	sort.Strings(outputFilenames)
 	log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 	return outputFilenames, nil
 }
