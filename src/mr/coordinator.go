@@ -12,16 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const TASK_DONE = "done"
+
 type Coordinator struct {
 	// Your definitions here.
 	mu               sync.Mutex
-	idxMap           map[int]string // [idx]->[work id]
+	idxMap           map[int]string // [idx]->[work id] or [idx]=TASK_DONE
 	nReduce          int
 	files            []string
 	nFinishMap       int
 	intermediateFile [][]string
 	readyReduce      bool
-	idxReduce        map[int]string // [idx]->[work id]
+	idxReduce        map[int]string // [idx]->[work id] or [idx]=TASK_DONE
 	outFiles         map[string]bool
 	// worker management
 	liveWorkers map[string]time.Time // [id]->ttl
@@ -38,27 +40,34 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	reply.TaskType = TaskTypeNothing
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, ok := c.liveWorkers[args.ID]; !ok {
+		log.Printf("warning: %v not register in coord", args.ID)
+		reply.TaskType = TaskTypeNothing
+		return nil
+	}
 	// still distribute map task
 	if !c.readyReduce {
 		reply.TaskType = TaskTypeWait
 		// find first occupy map task
 		for i := 0; i < len(c.files); i++ {
-			if _, ok := c.idxMap[i]; !ok {
+			if isDone, ok := c.idxMap[i]; !ok || isDone != TASK_DONE {
 				reply.TaskType = TaskTypeMap
 				reply.Index = i
 				reply.Filename = c.files[reply.Index]
 				reply.NumR = c.nReduce
 				c.idxMap[i] = args.ID
+				break
 			}
 		}
 	} else {
 		for i := 0; i < c.nReduce; i++ {
-			if _, ok := c.idxReduce[i]; !ok {
+			if isDone, ok := c.idxReduce[i]; !ok || isDone != TASK_DONE {
 				// all map finish, distribute reduce task
 				reply.TaskType = TaskTypeReduce
 				reply.IntermediateFiles = c.intermediateFile[i]
 				reply.Index = i
 				c.idxReduce[i] = args.ID
+				break
 			}
 		}
 	}
@@ -75,6 +84,12 @@ func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTask
 		for i, filename := range args.MapOutputFilenames {
 			c.intermediateFile[i] = append(c.intermediateFile[i], filename)
 		}
+		for idx, id := range c.idxMap {
+			if id == args.ID {
+				c.idxMap[idx] = TASK_DONE
+				break
+			}
+		}
 		c.nFinishMap += 1
 		// all map finish, ready to distribute reduce task
 		c.readyReduce = c.nFinishMap == len(c.files)
@@ -85,6 +100,12 @@ func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTask
 		defer c.mu.Unlock()
 		if _, exist := c.outFiles[args.ReduceOutputFilename]; !exist {
 			c.outFiles[args.ReduceOutputFilename] = true
+		}
+		for idx, id := range c.idxReduce {
+			if id == args.ID {
+				c.idxReduce[idx] = TASK_DONE
+				break
+			}
 		}
 	} else {
 		log.Fatalf("bad task type %v", args.TaskType)
@@ -109,7 +130,7 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 }
 
 func (c *Coordinator) genWorkerID() (id string) {
-	id = uuid.New().String()
+	id = uuid.New().String()[:8]
 	tomb := make(chan struct{}, 1)
 	go func(id string) {
 		<-tomb
