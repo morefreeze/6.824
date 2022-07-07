@@ -48,15 +48,10 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// ask for a file to process
-	colorPurple := "\033[35m"
-	log.SetPrefix(colorPurple)
-	workerExit := make(chan struct{})
-	go heartbeat(workerExit)
-	defer func() {
-		workerExit <- struct{}{}
-	}()
+	workerID := getIDFromCoord()
+	go heartbeat(workerID)
 	for {
-		askTaskReply, err := AskTask()
+		askTaskReply, err := AskTask(workerID)
 		log.Printf("receive AskTask %+v", askTaskReply)
 		if err != nil {
 			log.Fatalf("askTask failed %v", err)
@@ -68,13 +63,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			if err != nil {
 				log.Fatalf("doMap failed %v", err)
 			}
-			NoticeMapperTaskDone(outputFilenames)
+			NoticeMapperTaskDone(workerID, outputFilenames)
 		case TaskTypeReduce:
 			outputFilename, err := doReduce(askTaskReply, reducef)
 			if err != nil {
 				log.Fatalf("doReduce failed %v", err)
 			}
-			NoticeReducerTaskDone(outputFilename)
+			NoticeReducerTaskDone(workerID, outputFilename)
 		case TaskTypeNothing:
 			log.Printf("nothing to do, exiting...")
 			return
@@ -86,20 +81,20 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Fatalf("bad task type %v", askTaskReply.TaskType)
 		}
 	}
-
 }
 
-func AskTask() (*AskTaskReply, error) {
+func AskTask(id string) (*AskTaskReply, error) {
 	var askTaskReply AskTaskReply
-	if succ := call("Coordinator.AskTask", &AskTaskArgs{}, &askTaskReply); succ {
+	if succ := call("Coordinator.AskTask", &AskTaskArgs{BaseTaskArgs{ID: id}}, &askTaskReply); succ {
 		return &askTaskReply, nil
 	}
 	return nil, errors.New("call Coordinator.AskTask failed")
 }
 
-func NoticeMapperTaskDone(outputFilenames []string) (*NoticeTaskDoneReply, error) {
+func NoticeMapperTaskDone(id string, outputFilenames []string) (*NoticeTaskDoneReply, error) {
 	var reply NoticeTaskDoneReply
 	if succ := call("Coordinator.NoticeTaskDone", &NoticeTaskDoneArgs{
+		BaseTaskArgs:       BaseTaskArgs{ID: id},
 		TaskType:           TaskTypeMap,
 		MapOutputFilenames: outputFilenames,
 	}, &reply); succ {
@@ -108,9 +103,10 @@ func NoticeMapperTaskDone(outputFilenames []string) (*NoticeTaskDoneReply, error
 	return nil, errors.New("call Coordinator.NoticeMapperTaskDone failed")
 }
 
-func NoticeReducerTaskDone(outputFilename string) (*NoticeTaskDoneReply, error) {
+func NoticeReducerTaskDone(id, outputFilename string) (*NoticeTaskDoneReply, error) {
 	var reply NoticeTaskDoneReply
 	if succ := call("Coordinator.NoticeTaskDone", &NoticeTaskDoneArgs{
+		BaseTaskArgs:         BaseTaskArgs{ID: id},
 		TaskType:             TaskTypeReduce,
 		ReduceOutputFilename: outputFilename,
 	}, &reply); succ {
@@ -231,26 +227,23 @@ func doReduce(askTaskReply *AskTaskReply, reducef func(string, []string) string)
 	return outputFilename, nil
 }
 
-func heartbeat(exitCh <-chan struct{}) {
+func getIDFromCoord() string {
 	reply, err := Heartbeat(true, "")
 	if err != nil {
 		log.Fatalf("init heartbeat failed %v", err)
 	}
+	return reply.ID
+}
+func heartbeat(id string) {
 	tick := time.NewTicker(time.Second)
-	for {
-		select {
-		case <-tick.C:
-			Heartbeat(false, reply.ID)
-		case <-exitCh:
-			log.Printf("receive exit, stoppint beat")
-			return
-		}
+	for range tick.C {
+		Heartbeat(false, id)
 	}
 }
 
 func Heartbeat(init bool, id string) (*HeartbeatReply, error) {
 	var heartbeatReply HeartbeatReply
-	if succ := call("Coordinator.Heartbeat", &HeartbeatArgs{Init: init, ID: id}, &heartbeatReply); succ {
+	if succ := call("Coordinator.Heartbeat", &HeartbeatArgs{Init: init, BaseTaskArgs: BaseTaskArgs{ID: id}}, &heartbeatReply); succ {
 		return &heartbeatReply, nil
 	}
 	return nil, errors.New("call Coordinator.Heartbeat failed")

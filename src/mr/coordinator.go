@@ -15,17 +15,18 @@ import (
 type Coordinator struct {
 	// Your definitions here.
 	mu               sync.Mutex
-	idxMap           int
+	idxMap           map[int]string // [idx]->[work id]
 	nReduce          int
 	files            []string
 	nFinishMap       int
 	intermediateFile [][]string
 	readyReduce      bool
-	idxReduce        int
+	idxReduce        map[int]string // [idx]->[work id]
 	outFiles         map[string]bool
 	// worker management
 	liveWorkers map[string]time.Time // [id]->ttl
 	refreshTime time.Duration
+	workerFiles map[string][]int // [id]->[idx1, idx2]
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -40,19 +41,26 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	// still distribute map task
 	if !c.readyReduce {
 		reply.TaskType = TaskTypeWait
-		if c.idxMap < len(c.files) {
-			reply.TaskType = TaskTypeMap
-			reply.Index = c.idxMap
-			reply.Filename = c.files[reply.Index]
-			reply.NumR = c.nReduce
-			c.idxMap += 1
+		// find first occupy map task
+		for i := 0; i < len(c.files); i++ {
+			if _, ok := c.idxMap[i]; !ok {
+				reply.TaskType = TaskTypeMap
+				reply.Index = i
+				reply.Filename = c.files[reply.Index]
+				reply.NumR = c.nReduce
+				c.idxMap[i] = args.ID
+			}
 		}
-	} else if c.idxReduce < len(c.intermediateFile) {
-		// all map finish, distribute reduce task
-		reply.TaskType = TaskTypeReduce
-		reply.IntermediateFiles = c.intermediateFile[c.idxReduce]
-		reply.Index = c.idxReduce
-		c.idxReduce += 1
+	} else {
+		for i := 0; i < c.nReduce; i++ {
+			if _, ok := c.idxReduce[i]; !ok {
+				// all map finish, distribute reduce task
+				reply.TaskType = TaskTypeReduce
+				reply.IntermediateFiles = c.intermediateFile[i]
+				reply.Index = i
+				c.idxReduce[i] = args.ID
+			}
+		}
 	}
 	return nil
 
@@ -88,43 +96,62 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 	if reply == nil {
 		reply = &HeartbeatReply{}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if args.Init {
-		reply.ID = uuid.New().String()
-		c.liveWorkers[reply.ID] = time.Now().Add(c.refreshTime)
-		tomb := make(chan struct{}, 1)
-		go func(c *Coordinator, id string) {
-			<-tomb
-			log.Printf("receive dead letter id[%v]", id)
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			delete(c.liveWorkers, id)
-		}(c, reply.ID)
-		expireTime := time.After(c.refreshTime)
-		go func(id string, c *Coordinator) {
-			for t := range expireTime {
-				log.Printf("check time %v @%v", id, t)
-				c.mu.Lock()
-				if newTime, ok := c.liveWorkers[id]; ok && newTime.After(t) {
-					expireTime = time.After(time.Until(newTime))
-					log.Printf("refresh expire time id: %v newTime: %v", id, newTime)
-					c.mu.Unlock()
-				} else {
-					// id is dead
-					c.mu.Unlock()
-					break
-				}
-			}
-			log.Printf("%v die at %v", id, time.Now())
-			tomb <- struct{}{}
-		}(reply.ID, c)
+		reply.ID = c.genWorkerID()
 	} else {
 		reply.ID = args.ID
 	}
 	// refresh worker id
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.liveWorkers[reply.ID] = time.Now().Add(c.refreshTime)
 	return nil
+}
+
+func (c *Coordinator) genWorkerID() (id string) {
+	id = uuid.New().String()
+	tomb := make(chan struct{}, 1)
+	go func(id string) {
+		<-tomb
+		log.Printf("receive dead letter id[%v]", id)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.liveWorkers, id)
+	}(id)
+	expireTime := time.After(c.refreshTime)
+	go func(id string) {
+		for t := range expireTime {
+			log.Printf("check time %v", t)
+			c.mu.Lock()
+			if newTime, ok := c.liveWorkers[id]; ok && newTime.After(t) {
+				expireTime = time.After(time.Until(newTime))
+				c.mu.Unlock()
+			} else {
+				log.Printf("%v die at %v, starting clean", id, time.Now())
+				// id is dead, clean its task
+				if !c.readyReduce {
+					// clean map task
+					// TODO: use [id]->idx
+					for i, workerID := range c.idxMap {
+						if workerID == id {
+							delete(c.idxMap, i)
+						}
+					}
+				} else {
+					// clean reduce task
+					for i, workerID := range c.idxReduce {
+						if workerID == id {
+							delete(c.idxReduce, i)
+						}
+					}
+				}
+				c.mu.Unlock()
+				break
+			}
+		}
+		tomb <- struct{}{}
+	}(id)
+	return
 }
 
 //
@@ -181,11 +208,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.intermediateFile = make([][]string, nReduce)
 	c.readyReduce = false
 	c.outFiles = make(map[string]bool, nReduce)
-	c.liveWorkers = make(map[string]time.Time, 10)
 	c.refreshTime = time.Second * 10
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Llongfile)
-	colorGreen := "\033[32m"
-	log.SetPrefix(colorGreen)
 
 	log.Printf("starting coordinator server with %v files", len(files))
 	c.server()

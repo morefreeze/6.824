@@ -33,8 +33,14 @@ const (
 	TaskTypeWait
 )
 
+type BaseTaskArgs struct {
+	ID string
+}
+
 // Add your RPC definitions here.
-type AskTaskArgs struct{}
+type AskTaskArgs struct {
+	BaseTaskArgs
+}
 
 type AskTaskReply struct {
 	TaskType TaskType
@@ -48,6 +54,7 @@ type AskTaskReply struct {
 }
 
 type NoticeTaskDoneArgs struct {
+	BaseTaskArgs
 	TaskType TaskType
 	// map task
 	MapOutputFilenames []string
@@ -58,8 +65,8 @@ type NoticeTaskDoneArgs struct {
 type NoticeTaskDoneReply struct{}
 
 type HeartbeatArgs struct {
+	BaseTaskArgs
 	Init bool // this is a new worker, so coordinator will distribute a new id
-	ID   string
 }
 
 type HeartbeatReply struct {
