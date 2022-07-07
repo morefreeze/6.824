@@ -127,7 +127,7 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 		reply.ID = c.genWorkerID()
 	} else {
 		reply.ID = args.ID
-		log.Printf("receive %v heartbeat", args.ID)
+		// log.Printf("receive %v heartbeat", args.ID)
 	}
 	// refresh worker id
 	c.mu.Lock()
@@ -168,7 +168,7 @@ func (c *Coordinator) genWorkerID() (id string) {
 								delete(c.idxMap, i)
 							}
 						}
-						log.Printf("========map just confirm %+v", c.idxMap)
+						// log.Printf("========map just confirm %+v", c.idxMap)
 					} else {
 						// clean reduce task
 						for i, workerID := range c.idxReduce {
@@ -176,7 +176,7 @@ func (c *Coordinator) genWorkerID() (id string) {
 								delete(c.idxReduce, i)
 							}
 						}
-						log.Printf("=======reduce just confirm %+v", c.idxReduce)
+						// log.Printf("=======reduce just confirm %+v", c.idxReduce)
 					}
 					c.mu.Unlock()
 					tomb <- struct{}{}
