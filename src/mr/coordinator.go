@@ -104,10 +104,11 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 		expireTime := time.After(c.refreshTime)
 		go func(id string, c *Coordinator) {
 			for t := range expireTime {
-				log.Printf("check time %v", t)
+				log.Printf("check time %v @%v", id, t)
 				c.mu.Lock()
 				if newTime, ok := c.liveWorkers[id]; ok && newTime.After(t) {
 					expireTime = time.After(time.Until(newTime))
+					log.Printf("refresh expire time id: %v newTime: %v", id, newTime)
 					c.mu.Unlock()
 				} else {
 					// id is dead
@@ -180,7 +181,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.intermediateFile = make([][]string, nReduce)
 	c.readyReduce = false
 	c.outFiles = make(map[string]bool, nReduce)
+	c.liveWorkers = make(map[string]time.Time, 10)
 	c.refreshTime = time.Second * 10
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Llongfile)
+	colorGreen := "\033[32m"
+	log.SetPrefix(colorGreen)
 
 	log.Printf("starting coordinator server with %v files", len(files))
 	c.server()

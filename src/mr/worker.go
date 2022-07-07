@@ -48,7 +48,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// ask for a file to process
-	go heartbeat()
+	colorPurple := "\033[35m"
+	log.SetPrefix(colorPurple)
+	workerExit := make(chan struct{})
+	go heartbeat(workerExit)
+	defer func() {
+		workerExit <- struct{}{}
+	}()
 	for {
 		askTaskReply, err := AskTask()
 		log.Printf("receive AskTask %+v", askTaskReply)
@@ -80,6 +86,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Fatalf("bad task type %v", askTaskReply.TaskType)
 		}
 	}
+
 }
 
 func AskTask() (*AskTaskReply, error) {
@@ -224,14 +231,20 @@ func doReduce(askTaskReply *AskTaskReply, reducef func(string, []string) string)
 	return outputFilename, nil
 }
 
-func heartbeat() {
+func heartbeat(exitCh <-chan struct{}) {
 	reply, err := Heartbeat(true, "")
 	if err != nil {
 		log.Fatalf("init heartbeat failed %v", err)
 	}
 	tick := time.NewTicker(time.Second)
-	for range tick.C {
-		Heartbeat(false, reply.ID)
+	for {
+		select {
+		case <-tick.C:
+			Heartbeat(false, reply.ID)
+		case <-exitCh:
+			log.Printf("receive exit, stoppint beat")
+			return
+		}
 	}
 }
 
