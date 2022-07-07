@@ -27,7 +27,7 @@ type ExampleReply struct {
 type TaskType int
 
 const (
-	TaskTypeNothing TaskType = iota
+	TaskTypeNothing TaskType = iota // TaskTypeExit?
 	TaskTypeMap
 	TaskTypeReduce
 	TaskTypeWait

@@ -23,8 +23,8 @@ type Coordinator struct {
 	nFinishMap       int
 	intermediateFile [][]string
 	readyReduce      bool
-	idxReduce        map[int]string // [idx]->[work id] or [idx]=TASK_DONE
-	outFiles         map[string]bool
+	idxReduce        map[int]string  // [idx]->[work id] or [idx]=TASK_DONE
+	outFiles         map[string]bool // [output filename]=true
 	// worker management
 	liveWorkers map[string]time.Time // [id]->ttl
 	refreshTime time.Duration
@@ -36,13 +36,12 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 	if reply == nil {
 		reply = &AskTaskReply{}
 	}
-	defer log.Printf("distribute task reply: %+v", reply)
+	defer log.Printf("distribute task to %v reply: %+v", args.ID, reply)
 	reply.TaskType = TaskTypeNothing
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.liveWorkers[args.ID]; !ok {
 		log.Printf("warning: %v not register in coord", args.ID)
-		reply.TaskType = TaskTypeNothing
 		return nil
 	}
 	// still distribute map task
@@ -50,7 +49,7 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 		reply.TaskType = TaskTypeWait
 		// find first occupy map task
 		for i := 0; i < len(c.files); i++ {
-			if isDone, ok := c.idxMap[i]; !ok || isDone != TASK_DONE {
+			if _, ok := c.idxMap[i]; !ok {
 				reply.TaskType = TaskTypeMap
 				reply.Index = i
 				reply.Filename = c.files[reply.Index]
@@ -60,8 +59,9 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 			}
 		}
 	} else {
+		reply.TaskType = TaskTypeWait
 		for i := 0; i < c.nReduce; i++ {
-			if isDone, ok := c.idxReduce[i]; !ok || isDone != TASK_DONE {
+			if _, ok := c.idxReduce[i]; !ok {
 				// all map finish, distribute reduce task
 				reply.TaskType = TaskTypeReduce
 				reply.IntermediateFiles = c.intermediateFile[i]
@@ -76,11 +76,16 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 }
 
 func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTaskDoneReply) error {
-	if args.TaskType == TaskTypeMap {
+	log.Printf("receive notice task done %+v", args)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.liveWorkers[args.ID]; !ok {
+		log.Printf("warning: notice done but %v not register in coord", args.ID)
+		return nil
+	}
+	if args.TaskType == TaskTypeMap && !c.readyReduce {
 		// mark map task done and check if can enter reduce
 		/* last mapper finish then sort kvs */
-		c.mu.Lock()
-		defer c.mu.Unlock()
 		for i, filename := range args.MapOutputFilenames {
 			c.intermediateFile[i] = append(c.intermediateFile[i], filename)
 		}
@@ -93,20 +98,21 @@ func (c *Coordinator) NoticeTaskDone(args *NoticeTaskDoneArgs, reply *NoticeTask
 		c.nFinishMap += 1
 		// all map finish, ready to distribute reduce task
 		c.readyReduce = c.nFinishMap == len(c.files)
-		return nil
-	} else if args.TaskType == TaskTypeReduce {
-		// mark reduce task done and check if all finish
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if _, exist := c.outFiles[args.ReduceOutputFilename]; !exist {
-			c.outFiles[args.ReduceOutputFilename] = true
+		if c.readyReduce {
+			log.Printf("=============begin reduce")
 		}
+		log.Printf("distribute %+v map task(s) and %v done", c.idxMap, c.nFinishMap)
+		return nil
+	} else if args.TaskType == TaskTypeReduce && c.readyReduce {
+		// mark reduce task done and check if all finish
+		c.outFiles[args.ReduceOutputFilename] = true
 		for idx, id := range c.idxReduce {
 			if id == args.ID {
 				c.idxReduce[idx] = TASK_DONE
 				break
 			}
 		}
+		log.Printf("distribute %+v reduce task(s) and %v done", c.idxReduce, len(c.outFiles))
 	} else {
 		log.Fatalf("bad task type %v", args.TaskType)
 	}
@@ -121,6 +127,7 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 		reply.ID = c.genWorkerID()
 	} else {
 		reply.ID = args.ID
+		log.Printf("receive %v heartbeat", args.ID)
 	}
 	// refresh worker id
 	c.mu.Lock()
@@ -139,38 +146,44 @@ func (c *Coordinator) genWorkerID() (id string) {
 		defer c.mu.Unlock()
 		delete(c.liveWorkers, id)
 	}(id)
-	expireTime := time.After(c.refreshTime)
 	go func(id string) {
-		for t := range expireTime {
-			log.Printf("check time %v", t)
-			c.mu.Lock()
-			if newTime, ok := c.liveWorkers[id]; ok && newTime.After(t) {
-				expireTime = time.After(time.Until(newTime))
-				c.mu.Unlock()
-			} else {
-				log.Printf("%v die at %v, starting clean", id, time.Now())
-				// id is dead, clean its task
-				if !c.readyReduce {
-					// clean map task
-					// TODO: use [id]->idx
-					for i, workerID := range c.idxMap {
-						if workerID == id {
-							delete(c.idxMap, i)
-						}
-					}
+		expireTime := time.After(c.refreshTime)
+		for {
+			select {
+			case <-expireTime:
+				// log.Printf("check time id[%v] @%v", id, t)
+				c.mu.Lock()
+				if newTime, ok := c.liveWorkers[id]; ok && time.Until(newTime) > 200*time.Millisecond {
+					// log.Printf("new time id[%v] @%v", id, newTime)
+					expireTime = time.After(time.Until(newTime))
+					c.mu.Unlock()
 				} else {
-					// clean reduce task
-					for i, workerID := range c.idxReduce {
-						if workerID == id {
-							delete(c.idxReduce, i)
+					log.Printf("%v die at %v, starting clean", id, time.Now())
+					// id is dead, clean its task
+					if !c.readyReduce {
+						// clean map task
+						// TODO: use [id]->idx
+						for i, workerID := range c.idxMap {
+							if workerID == id {
+								delete(c.idxMap, i)
+							}
 						}
+						log.Printf("========map just confirm %+v", c.idxMap)
+					} else {
+						// clean reduce task
+						for i, workerID := range c.idxReduce {
+							if workerID == id {
+								delete(c.idxReduce, i)
+							}
+						}
+						log.Printf("=======reduce just confirm %+v", c.idxReduce)
 					}
+					c.mu.Unlock()
+					tomb <- struct{}{}
+					return
 				}
-				c.mu.Unlock()
-				break
 			}
 		}
-		tomb <- struct{}{}
 	}(id)
 	return
 }

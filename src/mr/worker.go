@@ -52,13 +52,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	colorPurple := "\033[35m"
 	log.SetPrefix(colorPurple)
 	workerExit := make(chan struct{})
-	go heartbeat(workerExit)
+	go heartbeat(workerID, workerExit)
 	defer func() {
 		workerExit <- struct{}{}
 	}()
 	for {
 		askTaskReply, err := AskTask(workerID)
-		log.Printf("receive AskTask %+v", askTaskReply)
+		log.Printf("%v receive AskTask %+v", workerID, askTaskReply)
 		if err != nil {
 			log.Fatalf("askTask failed %v", err)
 			return
@@ -69,22 +69,24 @@ func Worker(mapf func(string, string) []KeyValue,
 			if err != nil {
 				log.Fatalf("doMap failed %v", err)
 			}
+			// log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 			NoticeMapperTaskDone(workerID, outputFilenames)
 		case TaskTypeReduce:
 			outputFilename, err := doReduce(askTaskReply, reducef)
 			if err != nil {
 				log.Fatalf("doReduce failed %v", err)
 			}
+			// log.Printf("starting notice reducer task done outputFilename %v", outputFilename)
 			NoticeReducerTaskDone(workerID, outputFilename)
 		case TaskTypeNothing:
-			log.Printf("nothing to do, exiting...")
+			log.Printf("%v nothing to do, exiting...", workerID)
 			return
 		case TaskTypeWait:
 			waitTime := time.Second
-			log.Printf("wait %v", waitTime)
+			// log.Printf("%v wait %v", workerID, waitTime)
 			time.Sleep(waitTime)
 		default:
-			log.Fatalf("bad task type %v", askTaskReply.TaskType)
+			log.Fatalf("%v bad task type %v", workerID, askTaskReply.TaskType)
 		}
 	}
 }
@@ -157,7 +159,7 @@ func doMap(askTaskReply *AskTaskReply, mapf func(string, string) []KeyValue) ([]
 			if err != nil {
 				log.Fatalf("rename file failed tmp file: %v err: %v", outputFilename, err)
 			}
-			log.Printf("finish map output filename: %v", outputFilename)
+			// log.Printf("finish map output filename: %v", outputFilename)
 			filenameCh <- outputFilename
 		}(i, ch)
 		chs = append(chs, ch)
@@ -166,19 +168,18 @@ func doMap(askTaskReply *AskTaskReply, mapf func(string, string) []KeyValue) ([]
 		n := ihash(kv.Key) % askTaskReply.NumR
 		chs[n] <- kv
 	}
-	log.Printf("staring close chs")
+	// log.Printf("staring close chs")
 	for _, ch := range chs {
 		close(ch)
 	}
 	wg.Wait()
-	log.Printf("starting receive output filename")
+	// log.Printf("starting receive output filename")
 	close(filenameCh)
 	outputFilenames := make([]string, 0, askTaskReply.NumR)
 	for filename := range filenameCh {
 		outputFilenames = append(outputFilenames, filename)
 	}
 	sort.Strings(outputFilenames)
-	log.Printf("starting notice mapper task done outputFilenames %v", outputFilenames)
 	return outputFilenames, nil
 }
 
@@ -241,16 +242,12 @@ func getIDFromCoord() string {
 	return reply.ID
 }
 
-func heartbeat(exitCh <-chan struct{}) {
-	reply, err := Heartbeat(true, "")
-	if err != nil {
-		log.Fatalf("init heartbeat failed %v", err)
-	}
+func heartbeat(id string, exitCh <-chan struct{}) {
 	tick := time.NewTicker(time.Second)
 	for {
 		select {
 		case <-tick.C:
-			Heartbeat(false, reply.ID)
+			Heartbeat(false, id)
 		case <-exitCh:
 			log.Printf("receive exit, stoppint beat")
 			return
