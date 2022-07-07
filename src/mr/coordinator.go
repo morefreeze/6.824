@@ -208,7 +208,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.intermediateFile = make([][]string, nReduce)
 	c.readyReduce = false
 	c.outFiles = make(map[string]bool, nReduce)
+	c.liveWorkers = make(map[string]time.Time, 10)
+	c.liveWorkers = make(map[string]time.Time)
 	c.refreshTime = time.Second * 10
+	c.workerFiles = make(map[string][]int)
+	c.idxMap = make(map[int]string)
+	c.idxReduce = make(map[int]string, nReduce)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Llongfile)
+	colorGreen := "\033[32m"
+	log.SetPrefix(colorGreen)
 
 	log.Printf("starting coordinator server with %v files", len(files))
 	c.server()

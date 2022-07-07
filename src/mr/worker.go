@@ -49,7 +49,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 	// ask for a file to process
 	workerID := getIDFromCoord()
-	go heartbeat(workerID)
+	colorPurple := "\033[35m"
+	log.SetPrefix(colorPurple)
+	workerExit := make(chan struct{})
+	go heartbeat(workerExit)
+	defer func() {
+		workerExit <- struct{}{}
+	}()
 	for {
 		askTaskReply, err := AskTask(workerID)
 		log.Printf("receive AskTask %+v", askTaskReply)
@@ -234,10 +240,21 @@ func getIDFromCoord() string {
 	}
 	return reply.ID
 }
-func heartbeat(id string) {
+
+func heartbeat(exitCh <-chan struct{}) {
+	reply, err := Heartbeat(true, "")
+	if err != nil {
+		log.Fatalf("init heartbeat failed %v", err)
+	}
 	tick := time.NewTicker(time.Second)
-	for range tick.C {
-		Heartbeat(false, id)
+	for {
+		select {
+		case <-tick.C:
+			Heartbeat(false, reply.ID)
+		case <-exitCh:
+			log.Printf("receive exit, stoppint beat")
+			return
+		}
 	}
 }
 
